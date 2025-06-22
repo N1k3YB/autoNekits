@@ -1,0 +1,170 @@
+"""
+Утилиты для работы с Git
+"""
+import os
+import requests
+from typing import List, Tuple, Dict, Any
+from git import Repo, GitCommandError
+
+class GitManager:
+    """Класс для управления Git репозиторием"""
+    
+    def __init__(self, base_url: str = None):
+        """
+        Инициализация менеджера Git
+        
+        Args:
+            base_url: Базовый URL для Git репозиториев
+        """
+        self.base_url = base_url
+    
+    def set_base_url(self, base_url: str):
+        """
+        Устанавливает базовый URL для репозиториев
+        
+        Args:
+            base_url: Базовый URL
+        """
+        self.base_url = base_url
+    
+    def get_user_repositories(self, user_number: int) -> Tuple[bool, List[str]]:
+        """
+        Получает список репозиториев пользователя через API Gitea
+        
+        Args:
+            user_number: Номер пользователя
+            
+        Returns:
+            Кортеж (успех, список репозиториев или сообщение об ошибке)
+        """
+        user_name = f"224-user-{user_number}"
+        
+        try:
+            api_url = f"{self.base_url.split('/224-user-')[0]}/api/v1/users/{user_name}/repos"
+            
+            response = requests.get(api_url, timeout=10)
+            
+            if response.status_code == 200:
+                repos = response.json()
+                repo_names = [repo['name'] for repo in repos]
+                return True, repo_names
+            else:
+                return False, f"Ошибка получения списка репозиториев: {response.status_code}"
+                
+        except requests.RequestException as e:
+            return False, f"Ошибка запроса: {str(e)}"
+        except Exception as e:
+            return False, f"Непредвиденная ошибка: {str(e)}"
+    
+    def clone_repository(self, user_number: int, repo_name: str, target_path: str) -> Tuple[bool, str]:
+        """
+        Клонирует конкретный репозиторий пользователя
+        
+        Args:
+            user_number: Номер пользователя
+            repo_name: Имя репозитория
+            target_path: Путь для клонирования
+            
+        Returns:
+            Кортеж (успех, результат/ошибка)
+        """
+        user_name = f"224-user-{user_number}"
+        
+        try:
+            repo_url = f"{self.base_url.split('/224-user-')[0]}/{user_name}/{repo_name}"
+            
+            Repo.clone_from(repo_url, target_path)
+            return True, f"Успешно клонирован репозиторий {repo_name}"
+        except GitCommandError as e:
+            return False, str(e)
+        except Exception as e:
+            return False, str(e)
+    
+    def batch_clone_user_repositories(self, from_user: int, to_user: int, base_path: str, 
+                                     progress_callback=None) -> List[Dict[str, Any]]:
+        """
+        Клонирует все репозитории для диапазона пользователей
+        
+        Args:
+            from_user: Начальный номер пользователя
+            to_user: Конечный номер пользователя
+            base_path: Базовый путь для сохранения репозиториев
+            progress_callback: Функция обратного вызова для отчета о прогрессе
+            
+        Returns:
+            Список результатов клонирования
+        """
+        results = []
+        total_users = to_user - from_user + 1
+        processed = 0
+        total_repos = 0
+        cloned_repos = 0
+        
+        for user_num in range(from_user, to_user + 1):
+            user_name = f"224-user-{user_num}"
+            computer_folder = f"Компьютер {user_num}"
+            
+            user_folder = os.path.join(base_path, computer_folder)
+            
+            if not os.path.exists(user_folder):
+                try:
+                    os.makedirs(user_folder)
+                except Exception as e:
+                    results.append({
+                        "user_number": user_num,
+                        "repo_name": None,
+                        "success": False,
+                        "message": f"Ошибка создания директории: {str(e)}"
+                    })
+                    continue
+            
+            success, repos_or_error = self.get_user_repositories(user_num)
+            
+            if not success:
+                results.append({
+                    "user_number": user_num,
+                    "repo_name": None,
+                    "success": False, 
+                    "message": repos_or_error
+                })
+                
+                repo_name = user_name
+                repo_path = os.path.join(user_folder, repo_name)
+                
+                success, message = self.clone_repository(user_num, repo_name, repo_path)
+                
+                results.append({
+                    "user_number": user_num,
+                    "repo_name": repo_name,
+                    "success": success,
+                    "message": message
+                })
+                
+                if success:
+                    cloned_repos += 1
+                
+                total_repos += 1
+            else:
+                repos = repos_or_error
+                total_repos += len(repos)
+                
+                for repo_name in repos:
+                    repo_path = os.path.join(user_folder, repo_name)
+                    
+                    success, message = self.clone_repository(user_num, repo_name, repo_path)
+                    
+                    results.append({
+                        "user_number": user_num,
+                        "repo_name": repo_name,
+                        "success": success,
+                        "message": message
+                    })
+                    
+                    if success:
+                        cloned_repos += 1
+            
+            processed += 1
+            if progress_callback:
+                progress_callback(processed, total_users, cloned_repos, total_repos)
+        
+        return results 

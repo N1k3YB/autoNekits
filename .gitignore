@@ -1,0 +1,66 @@
+# Игнорирование файлов виртуального окружения Python
+venv/
+env/
+.env/
+.venv/
+ENV/
+
+# Игнорирование кэша Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+build/
+develop-eggs/
+dist/
+downloads/
+eggs/
+.eggs/
+lib/
+lib64/
+parts/
+sdist/
+var/
+wheels/
+*.egg-info/
+.installed.cfg
+*.egg
+
+# Игнорирование файлов IDE
+.idea/
+.vscode/
+*.swp
+*.swo
+.DS_Store
+
+# Игнорирование логов и временных файлов
+*.log
+*.tmp
+*.temp
+logs/
+log/
+
+# Игнорирование файлов конфигурации с чувствительными данными
+config.ini
+secrets.json
+.env
+
+# Игнорирование файлов базы данных
+*.db
+*.sqlite
+*.sqlite3
+*.postgresql
+
+# Игнорирование файлов документации
+docs/_build/
+docs/api/
+
+# Игнорирование файлов зависимостей
+node_modules/
+package-lock.json
+yarn.lock
+
+# Игнорирование файлов сборки
+dist/
+build/

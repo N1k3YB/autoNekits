@@ -1,0 +1,6 @@
+dotenv
+psycopg2
+pyodbc
+customtkinter
+gitpython
+requests
