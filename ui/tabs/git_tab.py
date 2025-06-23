@@ -35,6 +35,54 @@ class GitTab:
         )
         self.description_label.pack(anchor="w", padx=10, pady=(0, 15))
         
+        self.server_frame = ctk.CTkFrame(self.main_frame)
+        self.server_frame.pack(fill="x", padx=10, pady=(0, 15))
+        
+        self.server_label = ctk.CTkLabel(
+            self.server_frame, 
+            text="Настройки Git-сервера", 
+            font=ctk.CTkFont(size=14, weight="bold")
+        )
+        self.server_label.pack(anchor="w", padx=10, pady=5)
+        
+        self.url_frame = ctk.CTkFrame(self.server_frame)
+        self.url_frame.pack(fill="x", padx=10, pady=5)
+        
+        self.url_label = ctk.CTkLabel(self.url_frame, text="URL сервера:")
+        self.url_label.grid(row=0, column=0, padx=5, pady=5, sticky="w")
+        
+        
+        base_host = os.getenv("GIT_URL", "localhost")
+        if self.base_git_url:
+            try:
+                base_host = self.base_git_url.split('/224-user-')[0].split('://')[1]
+                if ':' in base_host:
+                    base_host = base_host.split(':')[0]
+            except:
+                pass
+        
+        self.url_entry = ctk.CTkEntry(self.url_frame, width=200)
+        self.url_entry.insert(0, base_host)
+        self.url_entry.grid(row=0, column=1, padx=5, pady=5, sticky="w")
+        
+        self.port_label = ctk.CTkLabel(self.url_frame, text="Порт:")
+        self.port_label.grid(row=0, column=2, padx=(20, 5), pady=5, sticky="w")
+        
+        base_port = os.getenv("GIT_PORT", "3000")
+        if self.base_git_url and ':' in self.base_git_url:
+            try:
+                url_parts = self.base_git_url.split('/224-user-')[0].split('://')
+                if len(url_parts) > 1 and ':' in url_parts[1]:
+                    host_port = url_parts[1].split(':')
+                    if len(host_port) > 1 and host_port[1].isdigit():
+                        base_port = host_port[1].split('/')[0]
+            except:
+                pass
+        
+        self.port_entry = ctk.CTkEntry(self.url_frame, width=100)
+        self.port_entry.insert(0, base_port)
+        self.port_entry.grid(row=0, column=3, padx=5, pady=5, sticky="w")
+        
         self.config_frame = ctk.CTkFrame(self.main_frame)
         self.config_frame.pack(fill="x", padx=10, pady=(0, 15))
         
@@ -183,13 +231,25 @@ class GitTab:
                 self.update_status(f"Путь {save_path} не существует")
                 return
             
+            git_host = self.url_entry.get().strip()
+            git_port = self.port_entry.get().strip()
+            
+            if not git_host:
+                self.update_status("Укажите URL сервера Git")
+                return
+            
+            if git_port and git_port != "80" and git_port != "443":
+                self.base_git_url = f"http://{git_host}:{git_port}/224-user-"
+            else:
+                self.base_git_url = f"http://{git_host}/224-user-"
+            
             self.log_text.configure(state="normal")
             self.log_text.delete(1.0, "end")
             self.log_text.configure(state="disabled")
             
             self.clone_button.configure(state="disabled")
             self.update_status("Начинаем клонирование репозиториев...")
-            self.log_message("Запуск процесса клонирования...")
+            self.log_message(f"Запуск процесса клонирования с сервера {self.base_git_url}...")
             
             self.progress_bar.set(0)
             self.repos_progress_bar.set(0)

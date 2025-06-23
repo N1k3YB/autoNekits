@@ -49,8 +49,12 @@ class GitManager:
                 repo_names = [repo['name'] for repo in repos]
                 return True, repo_names
             else:
-                return False, f"Ошибка получения списка репозиториев: {response.status_code}"
+                return False, f"Ошибка получения списка репозиториев: {response.status_code} - {response.reason}"
                 
+        except requests.exceptions.ConnectionError as e:
+            error_details = str(e)
+            server_host = api_url.split('/')[2]
+            return False, f"Не удалось подключиться к серверу {server_host}. Возможно, сервер недоступен или брандмауэр блокирует соединение. Подробности: {error_details}"
         except requests.RequestException as e:
             return False, f"Ошибка запроса: {str(e)}"
         except Exception as e:
@@ -71,11 +75,25 @@ class GitManager:
         user_name = f"224-user-{user_number}"
         
         try:
-            repo_url = f"{self.base_url.split('/224-user-')[0]}/{user_name}/{repo_name}"
+            base = self.base_url.split('/224-user-')[0]
+            
+            if repo_name == user_name:
+                repo_url = f"{base}/{user_name}"
+            else:
+                repo_url = f"{base}/{user_name}/{repo_name}"
             
             Repo.clone_from(repo_url, target_path)
             return True, f"Успешно клонирован репозиторий {repo_name}"
         except GitCommandError as e:
+            error_str = str(e)
+            
+            # Проверяем код ошибки 128 и наличие директории
+            if "exit code(128)" in error_str:
+                if "destination path" in error_str and "already exists" in error_str:
+                    return False, f"Репозиторий {repo_name} уже существует на вашем ПК в директории {target_path}"
+                elif "Could not connect to server" in error_str or "Failed to connect" in error_str:
+                    return False, f"Не удалось подключиться к серверу Git. Проверьте соединение и настройки сервера."
+            
             return False, str(e)
         except Exception as e:
             return False, str(e)
@@ -128,22 +146,10 @@ class GitManager:
                     "message": repos_or_error
                 })
                 
-                repo_name = user_name
-                repo_path = os.path.join(user_folder, repo_name)
-                
-                success, message = self.clone_repository(user_num, repo_name, repo_path)
-                
-                results.append({
-                    "user_number": user_num,
-                    "repo_name": repo_name,
-                    "success": success,
-                    "message": message
-                })
-                
-                if success:
-                    cloned_repos += 1
-                
-                total_repos += 1
+                processed += 1
+                if progress_callback:
+                    progress_callback(processed, total_users, cloned_repos, total_repos)
+                continue
             else:
                 repos = repos_or_error
                 total_repos += len(repos)

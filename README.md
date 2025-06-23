@@ -47,7 +47,8 @@ python main.py
    PG_HOST=localhost
    PG_USER=adminprolight
    PG_PASSWORD=5272
-   GIT_URL=http://localhost:3000/224-user-
+   GIT_URL=localhost
+   GIT_PORT=3000
 
    и т.д.
    ```
