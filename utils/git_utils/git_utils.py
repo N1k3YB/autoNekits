@@ -1,6 +1,3 @@
-"""
-Утилиты для работы с Git
-"""
 import os
 import requests
 from typing import List, Tuple, Dict, Any
@@ -99,7 +96,6 @@ class GitManager:
         except GitCommandError as e:
             error_str = str(e)
             
-            # Проверяем код ошибки 128 и наличие директории
             if "exit code(128)" in error_str:
                 if "destination path" in error_str and "already exists" in error_str:
                     return False, f"Репозиторий {repo_name} уже существует на вашем ПК в директории {target_path}"
@@ -134,20 +130,6 @@ class GitManager:
             user_name = f"{self.prefix}{user_num}"
             computer_folder = f"Компьютер {user_num}"
             
-            user_folder = os.path.join(base_path, computer_folder)
-            
-            if not os.path.exists(user_folder):
-                try:
-                    os.makedirs(user_folder)
-                except Exception as e:
-                    results.append({
-                        "user_number": user_num,
-                        "repo_name": None,
-                        "success": False,
-                        "message": f"Ошибка создания директории: {str(e)}"
-                    })
-                    continue
-            
             success, repos_or_error = self.get_user_repositories(user_num)
             
             if not success:
@@ -165,24 +147,42 @@ class GitManager:
             else:
                 repos = repos_or_error
                 total_repos += len(repos)
-                
-                for repo_name in repos:
-                    repo_path = os.path.join(user_folder, repo_name)
-                    
-                    success, message = self.clone_repository(user_num, repo_name, repo_path)
-                    
-                    results.append({
-                        "user_number": user_num,
-                        "repo_name": repo_name,
-                        "success": success,
-                        "message": message
-                    })
-                    
-                    if success:
-                        cloned_repos += 1
+
+                # Создаем папку только если у пользователя есть репозитории
+                if repos:
+                    user_folder = os.path.join(base_path, computer_folder)
+                    if not os.path.exists(user_folder):
+                        try:
+                            os.makedirs(user_folder)
+                        except Exception as e:
+                            results.append({
+                                "user_number": user_num,
+                                "repo_name": None,
+                                "success": False,
+                                "message": f"Ошибка создания директории: {str(e)}"
+                            })
+                            processed += 1
+                            if progress_callback:
+                                progress_callback(processed, total_users, cloned_repos, total_repos)
+                            continue
+
+                    for repo_name in repos:
+                        repo_path = os.path.join(user_folder, repo_name)
+                        
+                        success, message = self.clone_repository(user_num, repo_name, repo_path)
+                        
+                        results.append({
+                            "user_number": user_num,
+                            "repo_name": repo_name,
+                            "success": success,
+                            "message": message
+                        })
+                        
+                        if success:
+                            cloned_repos += 1
             
             processed += 1
             if progress_callback:
                 progress_callback(processed, total_users, cloned_repos, total_repos)
         
-        return results 
+        return results

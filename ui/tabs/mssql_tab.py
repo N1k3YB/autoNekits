@@ -253,49 +253,71 @@ class MSSQLTab:
         """Выполняет удаление баз данных в отдельном потоке"""
         self.update_cleanup_status(f"Начало удаления {len(databases)} баз данных...")
         self.update_cleanup_results("Процесс удаления запущен. Пожалуйста, подождите...")
-        
+
+        self.cleanup_connect_button.configure(state="disabled")
+        self.refresh_button.configure(state="disabled")
+        self.cleanup_button.configure(state="disabled")
+        self.delete_db_button.configure(state="disabled")
+
         server = self.cleanup_server_entry.get()
         trusted_connection = self.cleanup_auth_var.get() == "Windows"
         username = None if trusted_connection else self.cleanup_username_entry.get()
         password = None if trusted_connection else self.cleanup_password_entry.get()
-        
+
         results = {}
-        for db in databases:
-            try:
-                if isinstance(db, tuple):
-                    db_name = db[0]
-                else:
-                    db_name = db
-                    
-                self.update_cleanup_status(f"Удаление базы данных {db_name}...")
-                
-                self.cleaner.disconnect()
-                self.cleaner.connect(
-                    server=server,
-                    username=username,
-                    password=password,
-                    trusted_connection=trusted_connection
-                )
-                
-                success = self.cleaner.drop_database(db_name)
-                results[db_name] = success
-            except Exception as e:
-                if isinstance(db, tuple):
-                    db_name = db[0]
-                else:
-                    db_name = db
-                results[db_name] = False
-                self.update_cleanup_results(f"Ошибка при удалении {db_name}: {str(e)}")
-                
-        report = "Результаты удаления баз данных:\n\n"
-        for db, success in results.items():
-            status = "Успешно" if success else "Ошибка"
-            report += f"{db}: {status}\n"
-            
-        self.update_cleanup_results(report)
-        self.update_cleanup_status("Удаление завершено")
-        
-        self.refresh_database_list()
+        try:
+            self.cleaner.disconnect()
+            self.cleaner.connect(
+                server=server,
+                username=username,
+                password=password,
+                trusted_connection=trusted_connection
+            )
+
+            deleted_count = 0
+            for db in databases:
+                try:
+                    if isinstance(db, tuple):
+                        db_name = db[0]
+                    else:
+                        db_name = db
+
+                    self.update_cleanup_status(f"Удаление базы данных {db_name}...")
+
+                    success = self.cleaner.drop_database(db_name)
+                    results[db_name] = success
+                    if success:
+                        deleted_count += 1
+                except Exception as e:
+                    if isinstance(db, tuple):
+                        db_name = db[0]
+                    else:
+                        db_name = db
+                    results[db_name] = False
+                    self.update_cleanup_results(f"Ошибка при удалении {db_name}: {str(e)}")
+
+            report = f"Результаты удаления баз данных:\n\nУдалено {deleted_count} из {len(databases)} баз данных.\n\n"
+            for db, success in results.items():
+                status = "Успешно" if success else "Ошибка"
+                report += f"{db}: {status}\n"
+
+            self.update_cleanup_results(report)
+            self.update_cleanup_status("Удаление завершено")
+
+        except Exception as e:
+            self.update_cleanup_results(f"Общая ошибка при удалении баз данных: {str(e)}")
+            self.update_cleanup_status("Удаление завершено с ошибками")
+
+        finally:
+            self.parent.after(0, self._enable_ui)
+            self.parent.after(0, self.refresh_database_list)
+
+    def _enable_ui(self):
+        """Включает UI элементы обратно (выполняется в главном потоке)"""
+        self.cleanup_connect_button.configure(state="normal")
+        self.refresh_button.configure(state="normal")
+        self.cleanup_button.configure(state="normal")
+        self.delete_db_button.configure(state="normal")
     
     def confirm_delete_db(self, databases):
         """Запрашивает подтверждение действия удаления баз данных"""

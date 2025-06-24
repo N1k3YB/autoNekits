@@ -135,7 +135,7 @@ class MSSQLCleaner:
         
     def drop_all_tables_in_database(self, database_name):
         """
-        Удаляет все таблицы в указанной базе данных
+        Удаляет все таблицы в указанной базе данных, используя SQL-запросы для получения и удаления внешних ключей
         
         Args:
             database_name: Имя базы данных
@@ -155,35 +155,86 @@ class MSSQLCleaner:
                 database_name = database_name[1:-1]
             if database_name.endswith(","):
                 database_name = database_name[:-1]
-            
+        
         try:
-            self.connection.execute_query(f"USE [{database_name}]")
+            conn = self.connection.connection
+            cursor = conn.cursor()
             
-            result = self.connection.execute_query("""
+            cursor.execute(f"USE [{database_name}]")
+            conn.commit()
+
+            cursor.execute("EXEC sp_MSforeachtable 'DISABLE TRIGGER ALL ON ?'")
+            conn.commit()
+
+            cursor.execute("""
                 SELECT 
                     t.name AS table_name,
-                    s.name AS schema_name
+                    s.name AS schema_name,
+                    t.object_id AS table_object_id
                 FROM 
                     sys.tables t
                     INNER JOIN sys.schemas s ON t.schema_id = s.schema_id
+                ORDER BY
+                    t.name DESC -- Удаляем таблицы в обратном алфавитном порядке (может помочь с зависимостями)
             """)
+            tables = cursor.fetchall()
             
-            if result is None or result.empty:
+            if not tables:
                 return True  
-                
-            self.connection.execute_query("EXEC sp_MSforeachtable 'ALTER TABLE ? NOCHECK CONSTRAINT all'", commit=True)
             
-            for _, row in result.iterrows():
-                schema_name = row['schema_name']
-                table_name = row['table_name']
+            for table in tables:
+                schema_name = table.schema_name
+                table_name = table.table_name
+                table_object_id = table.table_object_id
                 try:
-                    self.connection.execute_query(f"DROP TABLE [{schema_name}].[{table_name}]", commit=True)
+                    cursor.execute(f"""
+                        SELECT
+                            'ALTER TABLE [' +  OBJECT_SCHEMA_NAME(parent_object_id) +
+                            '].[' + OBJECT_NAME(parent_object_id) +
+                            '] DROP CONSTRAINT [' + name + ']' AS DropStatement
+                        FROM sys.foreign_keys
+                        WHERE referenced_object_id = {table_object_id}
+                    """)
+                    drop_statements = cursor.fetchall()
+
+                    for drop_statement in drop_statements:
+                        drop_statement_sql = drop_statement.DropStatement
+                        try:
+                            cursor.execute(drop_statement_sql)
+                            conn.commit()
+                            print(f"Внешний ключ успешно удален: {drop_statement_sql}")
+                        except Exception as e:
+                            print(f"Ошибка при удалении внешнего ключа: {drop_statement_sql}: {str(e)}")
+                            conn.rollback()
+                            return False
+
+                    drop_table_query = f"""
+                        DECLARE @sql nvarchar(max);
+                        SET @sql = N'DROP TABLE [{schema_name}].[{table_name}]';
+                        EXEC sp_executesql @sql;
+                    """
+                    try:
+                        cursor.execute(drop_table_query)
+                        conn.commit()
+                        print(f"Таблица [{schema_name}].[{table_name}] успешно удалена")
+                    except Exception as e:
+                        print(f"Ошибка при удалении таблицы [{schema_name}].[{table_name}]: {str(e)}")
+                        conn.rollback()
+                        return False
+
                 except Exception as e:
-                    print(f"Ошибка при удалении таблицы {schema_name}.{table_name}: {str(e)}")
-                    
+                    print(f"Ошибка при обработке таблицы [{schema_name}].[{table_name}]: {str(e)}")
+                    conn.rollback()
+                    return False
+            
+            cursor.execute("DBCC FREEPROCCACHE")
+            conn.commit()
+
             return True
         except Exception as e:
             print(f"Ошибка при удалении таблиц в базе данных {database_name}: {str(e)}")
+            if conn:
+                conn.rollback()
             return False
             
     def drop_database(self, database_name):

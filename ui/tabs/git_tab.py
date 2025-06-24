@@ -84,7 +84,6 @@ class GitTab:
         self.port_entry.insert(0, base_port)
         self.port_entry.grid(row=0, column=3, padx=5, pady=5, sticky="w")
         
-        # Добавляем поле для префикса
         self.prefix_label = ctk.CTkLabel(self.url_frame, text="Префикс:")
         self.prefix_label.grid(row=1, column=0, padx=5, pady=5, sticky="w")
         
