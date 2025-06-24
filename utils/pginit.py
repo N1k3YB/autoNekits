@@ -1,15 +1,8 @@
 import psycopg2
 from psycopg2.extensions import ISOLATION_LEVEL_AUTOCOMMIT
 import os
-import dotenv
+from config import PG_HOST, PG_PORT, PG_USER, PG_PASSWORD, PG_DB
 
-dotenv.load_dotenv()
-
-host = os.getenv("PG_HOST")
-port = os.getenv("PG_PORT")
-user = os.getenv("PG_USER")
-password = os.getenv("PG_PASSWORD")
-default_db = os.getenv("PG_DB")
 
 create_tables_sql = """
 -- Таблица пользователей
@@ -59,11 +52,11 @@ CREATE TABLE OrderDetails (
 
 try:
     conn = psycopg2.connect(
-        host=host,
-        port=port,
-        user=user,
-        password=password,
-        dbname=default_db
+        host=PG_HOST,
+        port=PG_PORT,
+        user=PG_USER,
+        password=PG_PASSWORD,
+        dbname=PG_DB
     )
     conn.set_isolation_level(ISOLATION_LEVEL_AUTOCOMMIT) 
     
@@ -90,10 +83,10 @@ try:
         db_name = f"user224-{i}"
         try:
             conn = psycopg2.connect(
-                host=host,
-                port=port,
-                user=user,
-                password=password,
+                host=PG_HOST,
+                port=PG_PORT,
+                user=PG_USER,
+                password=PG_PASSWORD,
                 dbname=db_name
             )
             conn.set_isolation_level(ISOLATION_LEVEL_AUTOCOMMIT)

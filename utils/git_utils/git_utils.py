@@ -9,14 +9,16 @@ from git import Repo, GitCommandError
 class GitManager:
     """Класс для управления Git репозиторием"""
     
-    def __init__(self, base_url: str = None):
+    def __init__(self, base_url: str = None, prefix: str = None):
         """
         Инициализация менеджера Git
         
         Args:
             base_url: Базовый URL для Git репозиториев
+            prefix: Префикс для имён пользователей (по умолчанию "224-user-")
         """
         self.base_url = base_url
+        self.prefix = prefix or os.getenv("GIT_PREFIX", "224-user-")
     
     def set_base_url(self, base_url: str):
         """
@@ -26,6 +28,15 @@ class GitManager:
             base_url: Базовый URL
         """
         self.base_url = base_url
+        
+    def set_prefix(self, prefix: str):
+        """
+        Устанавливает префикс для имён пользователей
+        
+        Args:
+            prefix: Префикс
+        """
+        self.prefix = prefix
     
     def get_user_repositories(self, user_number: int) -> Tuple[bool, List[str]]:
         """
@@ -37,10 +48,11 @@ class GitManager:
         Returns:
             Кортеж (успех, список репозиториев или сообщение об ошибке)
         """
-        user_name = f"224-user-{user_number}"
+        user_name = f"{self.prefix}{user_number}"
         
         try:
-            api_url = f"{self.base_url.split('/224-user-')[0]}/api/v1/users/{user_name}/repos"
+            base = self.base_url.split(f'/{self.prefix}')[0] if f'/{self.prefix}' in self.base_url else self.base_url
+            api_url = f"{base}/api/v1/users/{user_name}/repos"
             
             response = requests.get(api_url, timeout=10)
             
@@ -72,10 +84,10 @@ class GitManager:
         Returns:
             Кортеж (успех, результат/ошибка)
         """
-        user_name = f"224-user-{user_number}"
+        user_name = f"{self.prefix}{user_number}"
         
         try:
-            base = self.base_url.split('/224-user-')[0]
+            base = self.base_url.split(f'/{self.prefix}')[0] if f'/{self.prefix}' in self.base_url else self.base_url
             
             if repo_name == user_name:
                 repo_url = f"{base}/{user_name}"
@@ -119,7 +131,7 @@ class GitManager:
         cloned_repos = 0
         
         for user_num in range(from_user, to_user + 1):
-            user_name = f"224-user-{user_num}"
+            user_name = f"{self.prefix}{user_num}"
             computer_folder = f"Компьютер {user_num}"
             
             user_folder = os.path.join(base_path, computer_folder)

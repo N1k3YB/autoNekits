@@ -9,9 +9,10 @@ class GitTab:
         self.parent = parent
         
         self.base_git_url = os.getenv("GIT_URL", "http://localhost:8888/224-user-")
+        self.git_prefix = os.getenv("GIT_PREFIX", "224-user-")
         self.desktop_path = os.path.join(os.path.expanduser("~"), "Desktop")
         
-        self.git_manager = GitManager(self.base_git_url)
+        self.git_manager = GitManager(self.base_git_url, self.git_prefix)
         
         self.setup_ui()
         
@@ -29,7 +30,7 @@ class GitTab:
         
         self.description_label = ctk.CTkLabel(
             self.main_frame, 
-            text=f"Будут клонированы репозитории пользователей формата '224-user-X'\nВ директории на рабочем столе в папки 'Компьютер X'",
+            text=f"Будут клонированы репозитории пользователей указанного формата\nВ директории на рабочем столе в папки 'Компьютер X'",
             font=ctk.CTkFont(size=14),
             justify="left"
         )
@@ -55,7 +56,7 @@ class GitTab:
         base_host = os.getenv("GIT_URL", "localhost")
         if self.base_git_url:
             try:
-                base_host = self.base_git_url.split('/224-user-')[0].split('://')[1]
+                base_host = self.base_git_url.split(f'/{self.git_prefix}')[0].split('://')[1]
                 if ':' in base_host:
                     base_host = base_host.split(':')[0]
             except:
@@ -71,7 +72,7 @@ class GitTab:
         base_port = os.getenv("GIT_PORT", "3000")
         if self.base_git_url and ':' in self.base_git_url:
             try:
-                url_parts = self.base_git_url.split('/224-user-')[0].split('://')
+                url_parts = self.base_git_url.split(f'/{self.git_prefix}')[0].split('://')
                 if len(url_parts) > 1 and ':' in url_parts[1]:
                     host_port = url_parts[1].split(':')
                     if len(host_port) > 1 and host_port[1].isdigit():
@@ -82,6 +83,14 @@ class GitTab:
         self.port_entry = ctk.CTkEntry(self.url_frame, width=100)
         self.port_entry.insert(0, base_port)
         self.port_entry.grid(row=0, column=3, padx=5, pady=5, sticky="w")
+        
+        # Добавляем поле для префикса
+        self.prefix_label = ctk.CTkLabel(self.url_frame, text="Префикс:")
+        self.prefix_label.grid(row=1, column=0, padx=5, pady=5, sticky="w")
+        
+        self.prefix_entry = ctk.CTkEntry(self.url_frame, width=200)
+        self.prefix_entry.insert(0, self.git_prefix)
+        self.prefix_entry.grid(row=1, column=1, padx=5, pady=5, sticky="w")
         
         self.config_frame = ctk.CTkFrame(self.main_frame)
         self.config_frame.pack(fill="x", padx=10, pady=(0, 15))
@@ -233,15 +242,22 @@ class GitTab:
             
             git_host = self.url_entry.get().strip()
             git_port = self.port_entry.get().strip()
+            git_prefix = self.prefix_entry.get().strip()
             
             if not git_host:
                 self.update_status("Укажите URL сервера Git")
                 return
+                
+            if not git_prefix:
+                self.update_status("Укажите префикс пользователя")
+                return
+            
+            self.git_prefix = git_prefix
             
             if git_port and git_port != "80" and git_port != "443":
-                self.base_git_url = f"http://{git_host}:{git_port}/224-user-"
+                self.base_git_url = f"http://{git_host}:{git_port}/{git_prefix}"
             else:
-                self.base_git_url = f"http://{git_host}/224-user-"
+                self.base_git_url = f"http://{git_host}/{git_prefix}"
             
             self.log_text.configure(state="normal")
             self.log_text.delete(1.0, "end")
@@ -266,6 +282,7 @@ class GitTab:
     def clone_repositories_thread(self, from_user, to_user, save_path):
         """Выполняет клонирование репозиториев в отдельном потоке"""
         self.git_manager.set_base_url(self.base_git_url)
+        self.git_manager.set_prefix(self.git_prefix)
         
         results = self.git_manager.batch_clone_user_repositories(
             from_user, 

@@ -3,10 +3,8 @@ from ..theme import Theme
 import threading
 import tkinter as tk
 import os
-from dotenv import load_dotenv
 from utils.db_utils import MSSQLConnection, MSSQLCleaner
 
-load_dotenv()
 
 class MSSQLTab:
     def __init__(self, parent):
