@@ -1,15 +1,18 @@
 import os
 import threading
 import customtkinter as ctk
+from tkinter import messagebox
 from ..theme import Theme
 from utils.git_utils import GitManager
+from utils.db_utils.gitea_utils import GiteaDBCleaner
+import config
 
 class GitTab:
     def __init__(self, parent):
         self.parent = parent
         
-        self.base_git_url = os.getenv("GIT_URL", "http://localhost:8888/224-user-")
-        self.git_prefix = os.getenv("GIT_PREFIX", "224-user-")
+        self.base_git_url = os.getenv("GIT_URL")
+        self.git_prefix = os.getenv("GIT_PREFIX")
         self.desktop_path = os.path.join(os.path.expanduser("~"), "Desktop")
         
         self.git_manager = GitManager(self.base_git_url, self.git_prefix)
@@ -186,6 +189,14 @@ class GitTab:
             **Theme.get_button_colors("primary")
         )
         self.clone_button.pack(side="right", padx=10, pady=10)
+        
+        self.delete_button = ctk.CTkButton(
+            self.action_frame, 
+            text="Удалить репозитории из БД",
+            command=self.show_delete_dialog,
+            **Theme.get_button_colors("danger") if hasattr(Theme, 'get_button_colors') else {"fg_color": "#d32f2f", "hover_color": "#b71c1c"}
+        )
+        self.delete_button.pack(side="right", padx=(0, 10), pady=10)
     
     def browse_directory(self):
         """Открывает диалог выбора директории"""
@@ -311,4 +322,503 @@ class GitTab:
         self.log_message(f"Завершено клонирование репозиториев. Успешно: {successful_repos} из {total_repos}")
         self.update_status(f"Готово. Успешно клонировано: {successful_repos} из {total_repos}")
         
-        self.clone_button.configure(state="normal") 
+        self.clone_button.configure(state="normal")
+    
+    def show_delete_dialog(self):
+        """Показывает диалог удаления репозиториев"""
+        dialog = DeleteRepositoriesDialog(self.parent, self.delete_repositories_callback)
+        dialog.show()
+    
+    def delete_repositories_callback(self, cabinet_number, db_type, db_config):
+        """Callback для удаления репозиториев из базы данных Gitea"""
+        self.log_message(f"Начинаем удаление репозиториев для кабинета {cabinet_number} из базы данных {db_type.upper()}...")
+        
+        # Отключаем кнопки во время операции
+        self.clone_button.configure(state="disabled")
+        self.delete_button.configure(state="disabled")
+        
+        threading.Thread(
+            target=self.delete_repositories_thread,
+            args=(cabinet_number, db_type, db_config),
+            daemon=True
+        ).start()
+    
+    def delete_repositories_thread(self, cabinet_number, db_type, db_config):
+        """Выполняет удаление репозиториев в отдельном потоке"""
+        try:
+            cleaner = GiteaDBCleaner(db_type=db_type)
+            
+            # Подключаемся к базе данных
+            if db_type == "mssql":
+                success, message = cleaner.connect_mssql(
+                    server=db_config.get('server'),
+                    database=db_config.get('database', 'gitea'),
+                    username=db_config.get('username'),
+                    password=db_config.get('password'),
+                    trusted_connection=db_config.get('trusted_connection', True)
+                )
+            else:  # postgres
+                success, message = cleaner.connect_postgres(
+                    host=db_config.get('host'),
+                    port=db_config.get('port', 5432),
+                    database=db_config.get('database', 'gitea'),
+                    username=db_config.get('username'),
+                    password=db_config.get('password'),
+                    use_ssl=db_config.get('use_ssl', False)
+                )
+            
+            if not success:
+                self.log_message(f"❌ Ошибка подключения: {message}")
+                self.update_status("Ошибка подключения к базе данных")
+                return
+            
+            self.log_message(f"✅ {message}")
+            
+            # Проверяем наличие таблиц Gitea
+            success, message, tables = cleaner.test_gitea_tables()
+            if not success:
+                self.log_message(f"❌ {message}")
+                self.update_status("Ошибка: таблицы Gitea не найдены")
+                cleaner.disconnect()
+                return
+            
+            self.log_message(f"✅ {message}")
+            
+            # Получаем список репозиториев для удаления
+            success, message, repositories = cleaner.get_repositories_by_cabinet(cabinet_number)
+            if not success:
+                self.log_message(f"❌ {message}")
+                self.update_status("Ошибка при поиске репозиториев")
+                cleaner.disconnect()
+                return
+            
+            if not repositories:
+                self.log_message(f"ℹ️ {message}")
+                self.update_status(f"Репозитории для кабинета {cabinet_number} не найдены")
+                cleaner.disconnect()
+                return
+            
+            self.log_message(f"ℹ️ {message}")
+            for repo in repositories:
+                self.log_message(f"   - {repo['name']} (ID: {repo['id']}, Владелец: {repo['owner']})")
+            
+            # Удаляем репозитории
+            success, message, deleted_count = cleaner.delete_repositories_by_cabinet(cabinet_number)
+            
+            if success:
+                self.log_message(f"✅ {message}")
+                self.update_status(f"Успешно удалено {deleted_count} репозиториев")
+            else:
+                self.log_message(f"❌ {message}")
+                self.update_status("Ошибка при удалении репозиториев")
+            
+            cleaner.disconnect()
+            
+        except Exception as e:
+            self.log_message(f"❌ Критическая ошибка: {str(e)}")
+            self.update_status("Критическая ошибка при удалении")
+        
+        finally:
+            # Включаем кнопки обратно
+            self.clone_button.configure(state="normal")
+            self.delete_button.configure(state="normal")
+
+
+class DeleteRepositoriesDialog:
+    """Диалог для удаления репозиториев из базы данных Gitea"""
+    
+    def __init__(self, parent, callback):
+        self.parent = parent
+        self.callback = callback
+        self.dialog = None
+    
+    def show(self):
+        """Показывает диалог"""
+        self.dialog = ctk.CTkToplevel(self.parent)
+        self.dialog.title("Удаление репозиториев Gitea")
+        self.dialog.geometry("500x720")
+        self.dialog.resizable(False, False)
+        
+        # Центрируем диалог
+        self.dialog.transient(self.parent)
+        self.dialog.grab_set()
+        
+        # Основной фрейм
+        main_frame = ctk.CTkFrame(self.dialog)
+        main_frame.pack(fill="both", expand=True, padx=20, pady=20)
+        
+        # Заголовок
+        title_label = ctk.CTkLabel(
+            main_frame,
+            text="Удаление репозиториев из базы данных Gitea",
+            font=ctk.CTkFont(size=16, weight="bold")
+        )
+        title_label.pack(pady=(0, 15))
+        
+        # Фрейм для номера кабинета
+        cabinet_frame = ctk.CTkFrame(main_frame)
+        cabinet_frame.pack(fill="x", pady=(0, 15))
+        
+        cabinet_label = ctk.CTkLabel(
+            cabinet_frame,
+            text="Укажите номер кабинета для очистки репозиториев",
+            wraplength=400,
+            justify="center"
+        )
+        cabinet_label.pack(pady=(10, 5))
+        
+        self.cabinet_entry = ctk.CTkEntry(
+            cabinet_frame,
+            width=100,
+            placeholder_text="224"
+        )
+        self.cabinet_entry.pack(pady=(0, 10))
+        
+        # Фрейм для выбора типа БД
+        db_type_frame = ctk.CTkFrame(main_frame)
+        db_type_frame.pack(fill="x", pady=(0, 15))
+        
+        db_type_label = ctk.CTkLabel(
+            db_type_frame,
+            text="Тип базы данных:",
+            font=ctk.CTkFont(weight="bold")
+        )
+        db_type_label.pack(pady=(10, 5))
+        
+        self.db_type_var = ctk.StringVar(value="mssql")
+        
+        db_radio_frame = ctk.CTkFrame(db_type_frame)
+        db_radio_frame.pack(pady=(0, 10))
+        
+        self.mssql_radio = ctk.CTkRadioButton(
+            db_radio_frame,
+            text="MS SQL Server",
+            variable=self.db_type_var,
+            value="mssql",
+            command=self.on_db_type_change
+        )
+        self.mssql_radio.pack(side="left", padx=(10, 20))
+        
+        self.postgres_radio = ctk.CTkRadioButton(
+            db_radio_frame,
+            text="PostgreSQL",
+            variable=self.db_type_var,
+            value="postgres",
+            command=self.on_db_type_change
+        )
+        self.postgres_radio.pack(side="left", padx=10)
+        
+        # Фрейм для настроек подключения
+        self.connection_frame = ctk.CTkFrame(main_frame)
+        self.connection_frame.pack(fill="x", pady=(0, 20))
+        
+        connection_label = ctk.CTkLabel(
+            self.connection_frame,
+            text="Настройки подключения:",
+            font=ctk.CTkFont(weight="bold")
+        )
+        connection_label.pack(pady=(10, 5))
+        
+        # Создаем поля для подключения
+        self.create_connection_fields()
+        
+        # Кнопки
+        buttons_frame = ctk.CTkFrame(main_frame)
+        buttons_frame.pack(fill="x", pady=(10, 0))
+        
+        # Кнопка тестирования подключения
+        self.test_button = ctk.CTkButton(
+            buttons_frame,
+            text="Тестировать подключение",
+            command=self.test_connection,
+            fg_color="#1976d2",
+            hover_color="#0d47a1"
+        )
+        self.test_button.pack(side="left", padx=(10, 0), pady=10)
+        
+        cancel_button = ctk.CTkButton(
+            buttons_frame,
+            text="Отмена",
+            command=self.close_dialog,
+            fg_color="gray",
+            hover_color="darkgray"
+        )
+        cancel_button.pack(side="right", padx=(10, 10), pady=10)
+        
+        self.delete_button = ctk.CTkButton(
+            buttons_frame,
+            text="Очистить",
+            command=self.on_delete_confirm,
+            fg_color="#d32f2f",
+            hover_color="#b71c1c"
+        )
+        self.delete_button.pack(side="right", padx=10, pady=10)
+        
+        # Фокус на поле ввода номера кабинета
+        self.cabinet_entry.focus()
+    
+    def create_connection_fields(self):
+        """Создает поля для настройки подключения"""
+        # Очищаем предыдущие поля
+        for widget in self.connection_frame.winfo_children():
+            if widget != self.connection_frame.winfo_children()[0]:  # Оставляем заголовок
+                widget.destroy()
+        
+        connection_label = ctk.CTkLabel(
+            self.connection_frame,
+            text="Настройки подключения:",
+            font=ctk.CTkFont(weight="bold")
+        )
+        connection_label.pack(pady=(10, 5))
+        
+        fields_frame = ctk.CTkFrame(self.connection_frame)
+        fields_frame.pack(fill="x", padx=10, pady=(0, 10))
+        
+        if self.db_type_var.get() == "mssql":
+            # Поля для MS SQL
+            # Сервер
+            server_label = ctk.CTkLabel(fields_frame, text="Сервер:")
+            server_label.grid(row=0, column=0, padx=5, pady=5, sticky="w")
+            
+            self.server_entry = ctk.CTkEntry(fields_frame, width=200)
+            self.server_entry.insert(0, config.MS_HOST or "localhost")
+            self.server_entry.grid(row=0, column=1, padx=5, pady=5, sticky="w")
+            
+            # База данных
+            db_label = ctk.CTkLabel(fields_frame, text="База данных:")
+            db_label.grid(row=1, column=0, padx=5, pady=5, sticky="w")
+            
+            self.database_entry = ctk.CTkEntry(fields_frame, width=200)
+            self.database_entry.insert(0, "gitea")  # MS SQL по умолчанию gitea
+            self.database_entry.grid(row=1, column=1, padx=5, pady=5, sticky="w")
+            
+            # Windows аутентификация
+            self.trusted_var = ctk.BooleanVar(value=True)
+            self.trusted_check = ctk.CTkCheckBox(
+                fields_frame,
+                text="Windows аутентификация",
+                variable=self.trusted_var,
+                command=self.on_trusted_change
+            )
+            self.trusted_check.grid(row=2, column=0, columnspan=2, padx=5, pady=5, sticky="w")
+            
+            # Пользователь и пароль (скрыты по умолчанию)
+            self.username_label = ctk.CTkLabel(fields_frame, text="Пользователь:")
+            self.username_entry = ctk.CTkEntry(fields_frame, width=200)
+            if config.MS_USER:
+                self.username_entry.insert(0, config.MS_USER)
+            
+            self.password_label = ctk.CTkLabel(fields_frame, text="Пароль:")
+            self.password_entry = ctk.CTkEntry(fields_frame, width=200, show="*")
+            if config.MS_PASSWORD:
+                self.password_entry.insert(0, config.MS_PASSWORD)
+            
+            self.on_trusted_change()  # Установить видимость полей
+            
+        else:  # postgres
+            # Поля для PostgreSQL
+            # Хост
+            host_label = ctk.CTkLabel(fields_frame, text="Хост:")
+            host_label.grid(row=0, column=0, padx=5, pady=5, sticky="w")
+            
+            self.host_entry = ctk.CTkEntry(fields_frame, width=200)
+            self.host_entry.insert(0, config.PG_HOST or "localhost")
+            self.host_entry.grid(row=0, column=1, padx=5, pady=5, sticky="w")
+            
+            # Порт
+            port_label = ctk.CTkLabel(fields_frame, text="Порт:")
+            port_label.grid(row=1, column=0, padx=5, pady=5, sticky="w")
+            
+            self.port_entry = ctk.CTkEntry(fields_frame, width=200)
+            self.port_entry.insert(0, config.PG_PORT or "5432")
+            self.port_entry.grid(row=1, column=1, padx=5, pady=5, sticky="w")
+            
+            # База данных
+            db_label = ctk.CTkLabel(fields_frame, text="База данных:")
+            db_label.grid(row=2, column=0, padx=5, pady=5, sticky="w")
+            
+            self.database_entry = ctk.CTkEntry(fields_frame, width=200)
+            self.database_entry.insert(0, config.PG_DB or "gitea")
+            self.database_entry.grid(row=2, column=1, padx=5, pady=5, sticky="w")
+            
+            # Пользователь
+            username_label = ctk.CTkLabel(fields_frame, text="Пользователь:")
+            username_label.grid(row=3, column=0, padx=5, pady=5, sticky="w")
+            
+            self.username_entry = ctk.CTkEntry(fields_frame, width=200)
+            if config.PG_USER:
+                self.username_entry.insert(0, config.PG_USER)
+            self.username_entry.grid(row=3, column=1, padx=5, pady=5, sticky="w")
+            
+            # Пароль
+            password_label = ctk.CTkLabel(fields_frame, text="Пароль:")
+            password_label.grid(row=4, column=0, padx=5, pady=5, sticky="w")
+            
+            self.password_entry = ctk.CTkEntry(fields_frame, width=200, show="*")
+            if config.PG_PASSWORD:
+                self.password_entry.insert(0, config.PG_PASSWORD)
+            self.password_entry.grid(row=4, column=1, padx=5, pady=5, sticky="w")
+            
+            # SSL
+            self.ssl_var = ctk.BooleanVar(value=False)
+            self.ssl_check = ctk.CTkCheckBox(
+                fields_frame,
+                text="Использовать SSL",
+                variable=self.ssl_var
+            )
+            self.ssl_check.grid(row=5, column=0, columnspan=2, padx=5, pady=5, sticky="w")
+    
+    def on_db_type_change(self):
+        """Обработчик изменения типа БД"""
+        self.create_connection_fields()
+    
+    def on_trusted_change(self):
+        """Обработчик изменения Windows аутентификации"""
+        if hasattr(self, 'username_label'):
+            if self.trusted_var.get():
+                # Скрываем поля пользователя и пароля
+                self.username_label.grid_remove()
+                self.username_entry.grid_remove()
+                self.password_label.grid_remove()
+                self.password_entry.grid_remove()
+            else:
+                # Показываем поля пользователя и пароля
+                self.username_label.grid(row=3, column=0, padx=5, pady=5, sticky="w")
+                self.username_entry.grid(row=3, column=1, padx=5, pady=5, sticky="w")
+                self.password_label.grid(row=4, column=0, padx=5, pady=5, sticky="w")
+                self.password_entry.grid(row=4, column=1, padx=5, pady=5, sticky="w")
+    
+    def on_delete_confirm(self):
+        """Обработчик подтверждения удаления"""
+        cabinet_number = self.cabinet_entry.get().strip()
+        
+        if not cabinet_number:
+            messagebox.showerror("Ошибка", "Укажите номер кабинета")
+            return
+        
+        try:
+            int(cabinet_number)  # Проверяем, что это число
+        except ValueError:
+            messagebox.showerror("Ошибка", "Номер кабинета должен быть числом")
+            return
+        
+        # Подтверждение удаления
+        if not messagebox.askyesno(
+            "Подтверждение удаления",
+            f"Вы уверены, что хотите удалить все репозитории для кабинета {cabinet_number}?\n\n"
+            f"Это действие необратимо!",
+            icon="warning"
+        ):
+            return
+        
+        # Собираем конфигурацию подключения
+        db_type = self.db_type_var.get()
+        db_config = {}
+        
+        if db_type == "mssql":
+            db_config = {
+                'server': self.server_entry.get().strip(),
+                'database': self.database_entry.get().strip() or 'gitea',
+                'trusted_connection': self.trusted_var.get()
+            }
+            
+            if not self.trusted_var.get():
+                db_config['username'] = self.username_entry.get().strip()
+                db_config['password'] = self.password_entry.get()
+        else:  # postgres
+            db_config = {
+                'host': self.host_entry.get().strip(),
+                'port': int(self.port_entry.get().strip() or 5432),
+                'database': self.database_entry.get().strip() or 'gitea',
+                'username': self.username_entry.get().strip(),
+                'password': self.password_entry.get(),
+                'use_ssl': self.ssl_var.get()
+            }
+        
+        # Проверяем обязательные поля
+        if db_type == "mssql":
+            if not db_config['server']:
+                messagebox.showerror("Ошибка", "Укажите сервер")
+                return
+            if not db_config['trusted_connection'] and not db_config.get('username'):
+                messagebox.showerror("Ошибка", "Укажите имя пользователя")
+                return
+        else:  # postgres
+            if not db_config['host']:
+                messagebox.showerror("Ошибка", "Укажите хост")
+                return
+            if not db_config['username']:
+                messagebox.showerror("Ошибка", "Укажите имя пользователя")
+                return
+        
+        # Закрываем диалог и вызываем callback
+        self.close_dialog()
+        self.callback(cabinet_number, db_type, db_config)
+    
+    def test_connection(self):
+        """Тестирует подключение к базе данных"""
+        # Отключаем кнопку на время теста
+        self.test_button.configure(state="disabled", text="Тестирование...")
+        
+        # Собираем конфигурацию подключения
+        db_type = self.db_type_var.get()
+        
+        try:
+            cleaner = GiteaDBCleaner(db_type=db_type)
+            
+            if db_type == "mssql":
+                if not hasattr(self, 'server_entry'):
+                    messagebox.showerror("Ошибка", "Поля подключения не созданы")
+                    return
+                
+                server = self.server_entry.get().strip()
+                database = self.database_entry.get().strip() or 'gitea'
+                trusted = self.trusted_var.get()
+                username = self.username_entry.get().strip() if not trusted else None
+                password = self.password_entry.get() if not trusted else None
+                
+                success, message = cleaner.connection.test_connection(
+                    server=server,
+                    database=database,
+                    username=username,
+                    password=password,
+                    trusted_connection=trusted
+                )
+                
+            else:  # postgres
+                if not hasattr(self, 'host_entry'):
+                    messagebox.showerror("Ошибка", "Поля подключения не созданы")
+                    return
+                
+                host = self.host_entry.get().strip()
+                port = self.port_entry.get().strip() or '5432'
+                database = self.database_entry.get().strip() or 'gitea'
+                username = self.username_entry.get().strip()
+                password = self.password_entry.get()
+                use_ssl = self.ssl_var.get()
+                
+                success, message = cleaner.test_connection_postgres(
+                    host=host,
+                    port=port,
+                    database=database,
+                    username=username,
+                    password=password,
+                    use_ssl=use_ssl
+                )
+            
+            if success:
+                messagebox.showinfo("Успех", f"✅ {message}")
+            else:
+                messagebox.showerror("Ошибка подключения", f"❌ {message}")
+                
+        except Exception as e:
+            messagebox.showerror("Ошибка", f"Ошибка при тестировании: {str(e)}")
+        
+        finally:
+            # Включаем кнопку обратно
+            self.test_button.configure(state="normal", text="Тестировать подключение")
+    
+    def close_dialog(self):
+        """Закрывает диалог"""
+        if self.dialog:
+            self.dialog.destroy()
